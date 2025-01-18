@@ -73,8 +73,27 @@ local servers = {
 	rust_analyzer = {
 		cachePriming = { enable = false },
 	},
-	nil_ls = {},
-	htmx = {},
+	nixd = {
+		cmd = { "nixd" },
+		settings = {
+			nixd = {
+				nixpkgs = {
+					expr = "import <nixpkgs> { }",
+				},
+				formatting = {
+					command = { "nixfmt" },
+				},
+				options = {
+					nixos = {
+						expr = '(builtins.getFlake "'
+							.. vim.loop.os_homedir()
+							.. '/.config/nixos").nixosConfigurations.desktop.options',
+					},
+				},
+			},
+		},
+	},
+	-- htmx = {},
 	tailwindcss = {},
 	html = {
 		filetypes = { "gotmpl" },
@@ -90,36 +109,45 @@ local servers = {
 		},
 	},
 }
+local function deep_merge_config(base, override)
+	if override == nil then
+		return base
+	end
 
-local function extend_server_filetypes(server_name)
-	local default_filetypes = lspconfig[server_name].document_config.default_config.filetypes or {}
-	local custom_filetypes = (servers[server_name] or {}).filetypes
+	local result = vim.deepcopy(base)
 
-	local extended_filetypes = custom_filetypes and vim.list_extend(vim.deepcopy(default_filetypes), custom_filetypes)
-		or default_filetypes
-	return extended_filetypes
+	for k, v in pairs(override) do
+		if type(v) == "table" and type(result[k]) == "table" then
+			result[k] = deep_merge_config(result[k], v)
+		else
+			result[k] = v
+		end
+	end
+
+	return result
 end
--- nixos-specific lsp configuration with server overrides
+
+for server, config in pairs(servers) do
+	servers[server] = deep_merge_config({
+		capabilities = capabilities,
+	}, config)
+end
+
 if is_nixos then
 	for server, config in pairs(servers) do
-		lspconfig[server].setup({
-			capabilities = vim.tbl_deep_extend("force", {}, capabilities, config.capabilities or {}),
-			filetypes = extend_server_filetypes(server),
-		})
+		lspconfig[server].setup(config)
 	end
-	-- use mason for non- systems
 else
 	local ensure_installed = vim.tbl_keys(servers)
 	vim.list_extend(ensure_installed, { "stylua" })
+
 	require("mason").setup()
 	require("mason-tool-installer").setup({ ensure_installed = ensure_installed })
+
 	require("mason-lspconfig").setup({
 		handlers = {
 			function(server)
-				local server = servers[server] or {}
-				server.capabilities = vim.tbl_deep_extend("force", {}, capabilities, server.capabilities or {})
-				server.filetypes = extend_server_filetypes(server)
-				lspconfig[server].setup(server)
+				lspconfig[server].setup(servers[server] or {})
 			end,
 		},
 	})
